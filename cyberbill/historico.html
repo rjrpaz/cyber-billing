@@ -1,0 +1,320 @@
+#!/usr/bin/perl
+
+$apache_root = "/usr/local/apache-root";
+
+$http_referer = $ENV{'HTTP_REFERER'};
+$url = "/cyber/historico.html";
+
+$dia_de_hoy = `/bin/date +%d`;
+$mes_actual = `/bin/date +%m`;
+$anio_actual = `/bin/date +%y`;
+
+print "Content-type: text/html\n\n";
+	print <<End_of_Head;
+<HTML>
+<TITLE>
+Reporte Diario
+</TITLE>
+<BODY>
+End_of_Head
+
+&parse_form_data (*FORM);
+
+#################################################################
+# 'wks' contiene al ip sobre el cual se va a ejecutar la accion #
+#################################################################
+$wks = $FORM{'wks'};
+$dia = $FORM{'dia'};
+$dia = sprintf("%02d", $dia);
+$mes = $FORM{'mes'};
+$mes = sprintf("%02d", $mes);
+$anio = $FORM{'anio'};
+($anio) = ($anio =~ /\d\d(.*)/);
+
+if ($http_referer =~ m/$url/)
+{
+	if ($wks eq "")
+	{
+		&return_error (500, "Error en el Proceso",
+		" No se ha seleccionado una Estaci&oacute;n de Trabajo sobre la cual
+		se realizar&aacute; el Reporte");
+		exit;
+	}
+
+	###################################################
+	# Listado de los consumos de todas las Estaciones #
+	###################################################
+	if ($wks eq "TODAS")
+	{
+		open (WKS, "/bin/grep -v ^# /etc/cyberbill.conf |");
+		while (<WKS>)
+		{
+			###############################
+			# Excluye a las lineas vacias #
+			###############################
+			if ($_ =~ m/\d/)
+			{
+				($ips[$nro_estaciones], $estaciones[$nro_estaciones]) = split /\s+/, $_;
+				$nro_estaciones++;
+			}
+		}
+		$i = 0;
+		while ($i < $nro_estaciones)
+		{
+			&tabla_wks ($estaciones[$i], $dia, $mes, $anio);
+			$i++;
+		}
+	}
+	else
+	{
+		&tabla_wks ($wks, $dia, $mes, $anio)
+	}
+	print "<H3><CENTER><B>Nueva consulta</B></CENTER></H3>\n";
+}
+&default($wks);
+exit;
+
+
+sub tabla_wks
+{
+	@local = @_;
+	print "<CENTER><B>Estaci&oacute;n: $local[0], Fecha: $local[1]/$local[2]/$local[3]</B></CENTER>\n";
+	print "<TABLE BORDER=1 ALIGN=\"CENTER\">\n";
+	print "<TR><TD>Hora Inicio Sesi&oacute;n</TD>\n<TD>Hora Fin Sesi&oacute;n</TD>\n<TD>Tiempo Acumulado</TD></TR>\n";
+
+	$local[0] = `/bin/grep $local[0] /etc/cyberbill.conf|grep -v ^#`;
+
+	###########################################
+	# Reemplaza el nombre de la WKS por su IP #
+	###########################################
+	($local[0]) = ($local[0] =~ /([^\s]*)/);
+	$estado_actual = `/sbin/ipchains -nL |grep $local[0]`;
+
+	$total_tiempo_acumulado = 0;
+	$begin = "";
+	$end = "";
+
+	$ARCHIVO= $apache_root."/logs/tarifacion";
+	if (($dia != $dia_de_hoy) || ($mes != $mes_actual) || ($anio != $anio_actual))
+	{
+		$ARCHIVO = $ARCHIVO."_".$anio.$mes.$dia;
+	}
+	$ARCHIVO = $ARCHIVO.".log";
+	open ARCHIVO or die &return_error (500, "Atenci&oacute;n",
+		" No se encuentran registros para la fecha especificada");
+
+	while (<ARCHIVO>)
+	{
+		chop;
+		if (/$local[0]/)
+		{
+			if (/begins/)
+			{
+				($begin) = ($_ =~ /time:\s([^\n]*)/);
+				# GMT-3
+				$begin = $begin - 10800
+			}
+			elsif (/ends/)
+			{
+				($end) = ($_ =~ /time:\s([^\n]*)/);
+				# GMT-3
+				$end = $end - 10800
+			}
+
+			##################################################
+			# Denota un ciclo de uso completo de la Estacion #
+			##################################################
+			if (($begin ne "") && ($end ne ""))
+			{
+				print "<TR><TD>";
+				@hora = gmtime($begin);
+				print $hora[2],":";	
+				$minutos = sprintf("%02d",$hora[1]);
+				print $minutos,"</TD>\n<TD>";
+				@hora = gmtime($end);
+				print $hora[2],":";
+				$minutos = sprintf("%02d",$hora[1]);
+				print $minutos,"</TD>\n<TD ALIGN=\"right\">";
+				$diferencia = $end - $begin;
+				$total_tiempo_acumulado = $total_tiempo_acumulado + $diferencia;
+				@hora = gmtime($diferencia);
+				print $hora[2],":";
+				$minutos = sprintf("%02d",$hora[1]);
+				print $minutos,"</TD></TR>\n";
+				$begin = ""; $end = "";
+			}
+		}
+	}
+
+	#####################################################################
+	# Cuando termino de revisar el archivo de logs, y queda una entrada #
+	# en begin, entonces la estacion esta habilitada todavia            #
+	#####################################################################
+	if (($begin ne "") && ($end eq "") && ($estado_actual ne ""))
+	{
+		print "<TR><TD>";
+		@hora = gmtime($begin);
+		print $hora[2],":";	
+		$minutos = sprintf("%02d",$hora[1]);
+		print $minutos,"</TD>\n<TD>";
+		if ($ARCHIVO =~ m/tarifacion.log/)
+		{
+			print "Actualmente en uso";
+		}
+		else
+		{
+			print "Informaci&oacute;n en<BR>otro archivo";
+		}
+		print "</TD>\n<TD ALIGN=\"right\">?</TD></TR>\n";
+	}
+
+	@hora = gmtime($total_tiempo_acumulado);
+	print "<TR><TD COLSPAN=\"2\" ALIGN=\"right\"><B>Total Acumulado</B></TD>\n<TD ALIGN=\"right\"><B>",$hora[2],":";
+	$minutos = sprintf("%02d",$hora[1]);
+	print $minutos,"</B></TD></TR>\n";
+
+	close (ARCHIVO);
+	print "</TABLE><HR>\n";
+}
+
+
+
+######################
+# Pagina por defecto #
+######################
+sub default
+{
+	@local = @_;
+
+	print "<FORM ACTION=\"historico.html\"><BR>";
+	print "<TABLE BORDER=1 ALIGN=\"center\">";
+	print "<TR>\n<TD>Seleccione la estaci&oacute;n de Trabajo<BR>sobre la cual realizar&aacute; el reporte:</TD>\n";
+	print "<TD><B><SELECT NAME=\"wks\" SIZE=\"1\">\n";
+	print "<OPTION";
+	if ($local[0] eq "")
+	{
+ 		print " SELECTED";
+	}
+	print ">TODAS\n";
+
+	##############################################################
+	# Abre el archivo de configuracion de los puestos de trabajo #
+	##############################################################
+	open (WKS, "/bin/grep -v ^# /etc/cyberbill.conf |");
+	while (<WKS>)
+	{
+		chop;
+		if ($_ ne "")
+		{
+			($ip, $hostname) = split /\s+/, $_;
+			print "<OPTION";
+			if ($local[0] eq $hostname)
+			{
+				print " SELECTED";
+			}
+			print ">",$hostname,"\n";
+		}
+	}
+	close (WKS);
+	print "</SELECT></B></TD>\n</TR>\n\n";
+
+	print "<TR>\n<TD>Seleccione el dia, mes y a&ntilde;o:</TD>\n";
+
+	print "<TD><B><SELECT NAME=\"dia\" SIZE=\"1\">\n";
+	$i = 1;
+	while ($i < 32)
+	{
+		print "<OPTION";
+		if ($i == $dia_de_hoy)
+		{
+			print " SELECTED";
+		}
+		print ">",$i,"\n";
+		$i++;
+	}
+	print "</SELECT>/\n\n";
+
+	print "<SELECT NAME=\"mes\" SIZE=\"1\">\n";
+	$i = 1;
+	while ($i < 13)
+	{
+		print "<OPTION";
+		if ($i == $mes_actual)
+		{
+			print " SELECTED";
+		}
+		print ">",$i,"\n";
+		$i++;
+	}
+	print "</SELECT>/\n\n";
+
+	$anio_completo="20".$anio_actual;
+	print "<SELECT NAME=\"anio\" SIZE=\"1\">\n";
+	print "<OPTION SELECTED>", $anio_completo-0,"\n";
+	print "<OPTION>", $anio_completo-1,"\n";
+	print "<OPTION>", $anio_completo-2,"\n";
+	print "</SELECT></B></TD></TR>";
+
+	print <<End_of_Tail;
+<TR><TD COLSPAN="2" ALIGN="center"><INPUT TYPE=\"Submit\" VALUE=\"Reporte\"></TD></TR>
+</TABLE>
+</FORM>
+</BODY>
+</HTML>
+End_of_Tail
+
+	exit;
+}
+
+
+
+sub parse_form_data
+{
+    local (*FORM_DATA) = @_;
+    local ( $request_method, $query_string, @key_value_pairs,
+                  $key_value, $key, $value);
+
+    $request_method = $ENV{'REQUEST_METHOD'};
+    if ($request_method eq "GET") {
+        $query_string = $ENV{'QUERY_STRING'};
+    } elsif ($request_method eq "POST") {
+        read (STDIN, $query_string, $ENV{'CONTENT_LENGTH'});
+    } else {
+        &return_error (500, "Error en el Server",
+                            " El Server utiliza un m&eacute;todo no soportado");
+    }
+
+    @key_value_pairs = split (/&/, $query_string);
+    foreach $key_value (@key_value_pairs) {
+        ($key, $value) = split (/=/, $key_value);
+        $value =~ tr/+/ /;
+        $value =~ s/%([\dA-Fa-f][\dA-Fa-f])/pack ("C", hex ($1))/eg;
+
+        if (defined($FORM_DATA{$key})) {
+            $FORM_DATA{$key} = join ("\0", $FORM_DATA{$key}, $value);
+        } else {
+                    $FORM_DATA{$key} = $value;
+        }
+    }
+}
+
+sub return_error
+{
+    local ($status, $keyword, $message) = @_;
+    print "Content-type: text/html", "\n";
+    print "Status: ", $status, " ", $keyword, "\n\n";
+    print <<End_of_Error;
+<HTML>
+<HEAD>
+    <TITLE>CyberBill - Error Inesperado</TITLE>
+</HEAD>
+<BODY>
+<H1>$keyword</H1>
+<HR>$message<HR>
+Por favor, contactenos telefonicamente para mayor informacion.
+</BODY>
+</HTML>
+End_of_Error
+    exit(1);
+}
+

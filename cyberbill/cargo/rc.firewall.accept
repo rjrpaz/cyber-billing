@@ -1,0 +1,7 @@
+#!/bin/sh
+/sbin/ipchains -F
+/sbin/ipchains -P input ACCEPT
+/sbin/ipchains -P output ACCEPT
+/sbin/ipchains -P forward ACCEPT
+
+

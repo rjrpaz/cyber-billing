@@ -1,0 +1,9 @@
+#!/bin/sh
+
+EXTERNAL_INTERFACE="ppp0"
+
+# Rechaza conexion de sitios problematicos
+# el archivo rc.firewall.blocked contiene una lista de comandos del tipo:
+# /sbin/ipchains -A input -i $EXTERNAL_INTERFACE -s <address/mask> -j DENY
+# que bloquean direcciones especificas
+

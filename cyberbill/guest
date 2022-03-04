@@ -1,0 +1,18 @@
+#!/usr/bin/perl
+
+print "Content-type: text/html\n\n";
+	print <<End_of_Head;
+<HTML>
+<TITLE>
+Conexi&oacute;n a Arnet - Guest
+</TITLE>
+<BODY>
+Intentando Conexi&oacute;n a Arnet - Guest ...
+Por favor, espere un minuto ...
+</BODY>
+</HTML>
+End_of_Head
+
+$comando = "/root/scripts/guest 1>/dev/null 2>&1 &";
+system ("$comando");
+exit;

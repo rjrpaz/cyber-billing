@@ -1,0 +1,417 @@
+#!/bin/sh
+
+EXTERNAL_INTERFACE="eth1"
+INTERNAL_INTERFACE="eth0"
+LOOPBACK_INTERFACE="lo"
+
+IPADDR="200.51.242.106"
+INTERNAL_IPADDR="150.150.1.73"
+ANYWHERE="any/0"
+
+LOOPBACK="127.0.0.0/8"
+NETWORK="200.51.242.104"
+NETMASK="255.255.255.248"
+CLASS_A="10.0.0.0/8"
+CLASS_B="172.16.0.0/12"
+CLASS_C="192.168.0.0/16"
+CLASS_D_MULTICAST="224.0.0.0/4"
+CLASS_E_RESERVED_NET="240.0.0.0/5"
+BROADCAST_SRC="0.0.0.0"
+BROADCAST_DEST="255.255.255.255"
+PRIVPORTS="0:1023"
+UNPRIVPORTS="1024:65535"
+
+NAMESERVER_1="200.16.169.50"
+NAMESERVER_2="200.16.169.51"
+OPENWINDOWS_PORT="2000"
+XWINDOW_PORTS="6000:6063"
+WEB_EXT="8000:8080"
+SOCKS_PORT="1080"
+NFS_PORT="2049"
+
+TRACEROUTE_SRC_PORTS="32769:65535"
+TRACEROUTE_DEST_PORTS="33434:33523"
+
+
+# Flushea las cadenas del Firewall, y empieza desde cero.
+/sbin/ipchains -F
+
+# Establece como politicas por defecto, denegar todo.
+/sbin/ipchains -P input DENY 
+/sbin/ipchains -P output REJECT 
+/sbin/ipchains -P forward REJECT 
+
+# Timeout para las conexiones con Masquerading
+/sbin/ipchains -M -S 6000 120 300
+
+# Deshabilita Fragmentacion de Paquetes
+/sbin/ipchains -A input -f -i $INTERNAL_INTERFACE -j DENY
+
+# Habilita proteccion por cookie de la senial SYN de TCP.
+echo 1 >/proc/sys/net/ipv4/tcp_syncookies
+
+# Habilita proteccion contra IP Spoofing
+# Levanta Verificacion de Source Address
+for i in /proc/sys/net/ipv4/conf/*/rp_filter
+do
+	echo 1 > $i
+done
+
+# Deshabilita aceptacion de paquetes de redireccionamiento ICMP
+for i in /proc/sys/net/ipv4/conf/*/accept_redirects
+do
+	echo 0 > $i
+done
+
+# Deshabilita paquetes source-routed
+for i in /proc/sys/net/ipv4/conf/*/accept_source_route
+do
+	echo 0 > $i
+done
+
+# Habilita uso de la interfaz de loopback.
+/sbin/ipchains -A input -i $LOOPBACK_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -i $LOOPBACK_INTERFACE -j ACCEPT
+
+
+# Rechaza conexion de sitios problematicos
+# el archivo /etc/rc.d/rc.firewall.blocked contiene una lista de comandos
+# /sbin/ipchains -A input -i $EXTERNAL_INTERFACE -s <address/mask> -j DENY
+# que bloquean direcciones especificas
+
+if [ -f /etc/rc.d/rc.firewall.blocked ]
+then
+	. /etc/rc.d/rc.firewall.blocked
+fi
+
+
+# Spofing y Direcciones Erroneas
+
+# Rechaza paquetes spoofeados que supuestamente son de la direccion de
+# nuestras interfaces
+/sbin/ipchains -A input -s $IPADDR -j DENY -l
+/sbin/ipchains -A input -s $INTERNAL_IPADDR -j DENY -l
+
+# Rechaza paquetes que vienen o van a una red privada clase A
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -s $CLASS_A -j DENY
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -d $CLASS_A -j DENY
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -s $CLASS_A -j DENY -l
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -d $CLASS_A -j DENY -l
+
+
+# Rechaza paquetes que vienen o van a una red privada clase B
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -s $CLASS_B -j DENY
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -d $CLASS_B -j DENY
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -s $CLASS_B -j DENY -l
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -d $CLASS_B -j DENY -l
+
+
+# Rechaza paquetes que vienen o van a una red privada clase C
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -s $CLASS_C -j DENY
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -d $CLASS_C -j DENY
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -s $CLASS_C -j DENY -l
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -d $CLASS_C -j DENY -l
+
+
+# Rechaza paquetes que dicen ser de la direccion de loopback
+/sbin/ipchains -A input -s $LOOPBACK -j DENY
+/sbin/ipchains -A output -s $LOOPBACK -j DENY -l
+
+
+# Rechaza packetes de broadcast malformados
+/sbin/ipchains -A input -s $BROADCAST_DEST -j DENY -l
+/sbin/ipchains -A input -d $BROADCAST_SRC -j DENY -l
+/sbin/ipchains -A output -s $BROADCAST_DEST -j DENY -l
+/sbin/ipchains -A output -d $BROADCAST_SRC -j DENY -l
+
+
+# Rechaza direcciones multicast Clase D
+# multicast solo es valido como direccion de origen de una conexion
+# multicast usa UDP
+/sbin/ipchains -A input -s $CLASS_D_MULTICAST -j DENY -l
+/sbin/ipchains -A output -s $CLASS_D_MULTICAST -j REJECT -l
+
+
+# Rechaza IPs reservados clase E
+/sbin/ipchains -A input -s $CLASS_E_RESERVED_NET -j DENY -l
+/sbin/ipchains -A output -s $CLASS_E_RESERVED_NET -j REJECT -l
+
+
+# Rechaza direcciones definidas como "reservadas" por el IANA
+# Clase A: 0, 1, 2, 5, 7, 23, 27, 31, 37, 39, 41, 42, 52-60
+/sbin/ipchains -A input -s 1.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 2.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 5.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 7.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 23.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 27.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 31.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 37.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 39.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 41.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 42.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 58.0.0.0/7 -j DENY -l
+/sbin/ipchains -A input -s 60.0.0.0/8 -j DENY -l
+# Clase A 65.*.*.* al 79.*.*.*
+/sbin/ipchains -A input -s 65.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 66.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 67.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 68.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 69.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 70.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 71.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 72.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 73.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 74.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 75.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 76.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 77.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 78.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 79.0.0.0/8 -j DENY -l
+# Clase A 80.*.*.* al 95.*.*.*
+/sbin/ipchains -A input -s 80.0.0.0/4 -j DENY -l
+# Clase A 96.*.*.* al 111.*.*.*
+/sbin/ipchains -A input -s 96.0.0.0/4 -j DENY -l
+# Clase A 112.*.*.* al 126.*.*.*
+/sbin/ipchains -A input -s 112.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 113.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 114.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 115.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 116.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 117.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 118.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 119.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 120.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 121.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 122.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 123.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 124.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 125.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 126.0.0.0/8 -j DENY -l
+# Clase A 217.*.*.* al 219.*.*.*
+/sbin/ipchains -A input -s 197.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 217.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 218.0.0.0/8 -j DENY -l
+/sbin/ipchains -A input -s 219.0.0.0/8 -j DENY -l
+# Clase A 220.*.*.* al 223.*.*.*
+/sbin/ipchains -A input -s 220.0.0.0/6 -j DENY -l
+
+
+# ICMP
+# Source_Quench
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 4 -d $IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $IPADDR 4 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 4 -d $INTERNAL_IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $INTERNAL_IPADDR 4 -d $ANYWHERE -j ACCEPT
+
+# Parameter Problem
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 12 -d $IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $IPADDR 12 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 12 -d $INTERNAL_IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $INTERNAL_IPADDR 12 -d $ANYWHERE -j ACCEPT
+
+# Dest_Unreachable, Service_Unavailable
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 3 -d $IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $IPADDR 3 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $IPADDR fragmentation-needed -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 3 -d $INTERNAL_IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $INTERNAL_IPADDR 3 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $INTERNAL_IPADDR fragmentation-needed -d $ANYWHERE -j ACCEPT
+
+# Time_Exceeded
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 11 -d $IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $IPADDR 11 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 11 -d $INTERNAL_IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $INTERNAL_IPADDR 11 -d $ANYWHERE -j ACCEPT
+
+# Permite pings salientes hacia cualquier lado
+/sbin/ipchains -A output -p icmp -s $IPADDR 8 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 0 -d $IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $INTERNAL_IPADDR 8 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 0 -d $INTERNAL_IPADDR -j ACCEPT
+
+# Permite pings entrantes desde cualquier lado
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 8 -d $IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $IPADDR 0 -d $ANYWHERE -j ACCEPT
+/sbin/ipchains -A input -p icmp -s $ANYWHERE 8 -d $INTERNAL_IPADDR -j ACCEPT
+/sbin/ipchains -A output -p icmp -s $INTERNAL_IPADDR 0 -d $ANYWHERE -j ACCEPT
+
+
+# Bloquea y logea ataques tipo "smurf" entrantes y salientes en todas
+# las interfaces
+/sbin/ipchains -A input -p icmp -d $BROADCAST_DEST -j DENY -l
+/sbin/ipchains -A output -p icmp -d $BROADCAST_DEST -j DENY -l
+# Smurf attack - Network Mask
+/sbin/ipchains -A input -p icmp -d $NETMASK -j DENY -l
+/sbin/ipchains -A output -p icmp -d $NETMASK -j DENY -l
+# Smurf attack - Network Address
+/sbin/ipchains -A input -p icmp -d $NETWORK -j DENY -l
+/sbin/ipchains -A output -p icmp -d $NETWORK -j DENY -l
+
+
+# Denegar acceso a servicios que corren en puertos sin privilegio
+
+# OpenWindows: establecer una conexion
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -y -s $IPADDR -d $ANYWHERE $OPENWINDOWS_PORT -j REJECT -l
+# conexion entrante OpenWindows
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp -y -d $IPADDR $OPENWINDOWS_PORT -j DENY -l
+
+
+# X Window: establecer una conexion remota
+# Rechaza la conexion
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -y -s $IPADDR -d $ANYWHERE $XWINDOW_PORTS -j REJECT
+
+# X Window: intento de conexion entrante
+# Rechaza la conexion
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp -y -d $IPADDR $XWINDOW_PORTS -j DENY -l
+
+
+# SOCKS: establecer una conexion remota
+# Rechaza la conexion
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -y -s $IPADDR -d $ANYWHERE $SOCKS_PORT -j REJECT -l
+# SOCKS: conexion entrante
+# Rechaza la conexion
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp -y -d $IPADDR $SOCKS_PORT -j DENY -l
+
+
+# NFS: TCP connections
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp -y -d $IPADDR $NFS_PORT -j DENY -l
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -y -d $ANYWHERE $NFS_PORT -j REJECT -l
+
+# NFS: UDP connections
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p udp -d $IPADDR $NFS_PORT -j DENY -l
+# NFS: requerimientos entrantes
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p udp -d $ANYWHERE $NFS_PORT -j REJECT -l
+
+
+# Traceroute
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p udp -s $IPADDR $TRACEROUTE_SRC_PORTS -d $ANYWHERE $TRACEROUTE_DEST_PORTS -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p udp -s $ANYWHERE $TRACEROUTE_SRC_PORTS -d $IPADDR $TRACEROUTE_DEST_PORTS -j ACCEPT
+
+
+# DNS en modo cliente
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p udp -s $IPADDR $UNPRIVPORTS -d $NAMESERVER_1 53 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p udp -s $NAMESERVER_1 53 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $NAMESERVER_1 53 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $NAMESERVER_1 53 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+# DNS Secundario
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p udp -s $IPADDR $UNPRIVPORTS -d $NAMESERVER_2 53 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p udp -s $NAMESERVER_2 53 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $NAMESERVER_2 53 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $NAMESERVER_2 53 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+
+# AUTH Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 113 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 113 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# SNMP Client
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p udp -s $ANYWHERE 161 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p udp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 161 -j ACCEPT
+
+
+# SMTP Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 25 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 25 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# POP3 Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 110 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 110 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# IMAP Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 143 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 143 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# NEWS Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 119 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 119 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# Telnet Client
+/sbin/ipchains -A output -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 23 -j ACCEPT
+/sbin/ipchains -A input -p tcp ! -y -s $ANYWHERE 23 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# FTP Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 21 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 21 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+# FTP Client - Port de Datos - Modo Normal
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp -s $ANYWHERE 20 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+#/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp ! -y -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 20 -j ACCEPT
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 20 -j ACCEPT
+
+# FTP Client - Port de Datos - Modo Pasivo
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE $UNPRIVPORTS -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE $UNPRIVPORTS -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# Squid
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.1.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.2.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.3.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.4.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.5.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.6.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.7.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+/sbin/ipchains -A input -i $INTERNAL_INTERFACE -p tcp -s 150.150.8.0/24 $UNPRIVPORTS -d $ANYWHERE 80 -j REDIRECT 3128
+
+
+# HTTP Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 80 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 80 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# HTTP Client Extendido
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE $WEB_EXT -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE $WEB_EXT -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# HTTPS Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 443 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 443 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# Finger Client
+/sbin/ipchains -A output -i $EXTERNAL_INTERFACE -p tcp -s $IPADDR $UNPRIVPORTS -d $ANYWHERE 79 -j ACCEPT
+/sbin/ipchains -A input -i $EXTERNAL_INTERFACE -p tcp ! -y -s $ANYWHERE 79 -d $IPADDR $UNPRIVPORTS -j ACCEPT
+
+
+# Reglas para la interfaz interna
+/sbin/ipchains -A input -s 150.150.1.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.1.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A input -s 150.150.2.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.2.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A input -s 150.150.3.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.3.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A input -s 150.150.4.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.4.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A input -s 150.150.5.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.5.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A input -s 150.150.6.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.6.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A input -s 150.150.7.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.7.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A input -s 150.150.8.0/24 -d $ANYWHERE -i $INTERNAL_INTERFACE -j ACCEPT
+/sbin/ipchains -A output -s $ANYWHERE -d 150.150.8.0/24 -i $INTERNAL_INTERFACE -j ACCEPT
+
+
+# Reglas de Masquerading
+/sbin/ipchains -A forward -s 150.150.1.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+/sbin/ipchains -A forward -s 150.150.2.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+/sbin/ipchains -A forward -s 150.150.3.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+/sbin/ipchains -A forward -s 150.150.4.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+/sbin/ipchains -A forward -s 150.150.5.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+/sbin/ipchains -A forward -s 150.150.6.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+/sbin/ipchains -A forward -s 150.150.7.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+/sbin/ipchains -A forward -s 150.150.8.0/24 -i $EXTERNAL_INTERFACE -j MASQ
+
+

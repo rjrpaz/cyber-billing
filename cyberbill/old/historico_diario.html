@@ -1,0 +1,162 @@
+#!/usr/bin/perl
+
+# $webmaster = "root\@localhost";
+#$apache_root = "/usr/local/apache-root";
+
+# $referer = $ENV{'HTTP_REFERER'};
+# $host = $ENV{'HTTP_HOST'};
+# $url = $ENV{'REQUEST_URI'};
+
+#($referer) = ($referer =~ /http:\/\/$host(.*)/);
+
+
+&parse_form_data (*FORM);
+
+#################################################################
+# 'wks' contiene al ip sobre el cual se va a ejecutar la accion #
+#################################################################
+$wks = $FORM{'wks'};
+if ($wks eq "")
+{
+	$wks = `/bin/grep -v ^# /etc/cyberbill.conf |/usr/bin/head -n 1`;
+}
+
+
+print "Content-type: text/html\n\n";
+#print "Content-type: text/plain\n\n";
+print <<End_of_Head;
+<HTML>
+<TITLE>
+Reporte Diario
+</TITLE>
+<BODY>
+<FORM ACTION="historico.pl"><BR>
+<TABLE BORDER=1>
+End_of_Head
+
+print "<TR>\n<TD>Seleccione la estaci&oacute;n de Trabajo<BR>sobre la cual realizar&aacute; el reporte:</TD>\n";
+print "<TD><SELECT NAME=\"wks\" SIZE=\"1\">\n";
+
+##############################################################
+# Abre el archivo de configuracion de los puestos de trabajo #
+##############################################################
+open (WKS, "/bin/grep -v ^# /etc/cyberbill.conf |");
+while (<WKS>)
+{
+	chop;
+	if ($_ ne "")
+	{
+		($ip, $hostname) = split /\s+/, $_;
+		print "<OPTION";
+		if ($ip eq $wks)
+		{
+			print " SELECTED";
+		}
+		print ">",$hostname,"\n";
+	}
+}
+close (WKS);
+print "</SELECT></TD>\n</TR>\n\n";
+
+
+print "<TR>\n<TD>Seleccione el dia, mes y a&ntilde;o:</TD>\n";
+
+print "<TD><SELECT NAME=\"dia\" SIZE=\"1\">\n";
+$dia_de_hoy = `/bin/date +%d`;
+$i = 1;
+while ($i < 32)
+{
+	print "<OPTION";
+	if ($i == $dia_de_hoy)
+	{
+		print " SELECTED";
+	}
+	print ">",$i,"\n";
+	$i++;
+}
+print "</SELECT>/\n\n";
+
+print "<SELECT NAME=\"mes\" SIZE=\"1\">\n";
+$mes_actual = `/bin/date +%m`;
+$i = 1;
+while ($i < 13)
+{
+	print "<OPTION";
+	if ($i == $mes_actual)
+	{
+		print " SELECTED";
+	}
+	print ">",$i,"\n";
+	$i++;
+}
+print "</SELECT>/\n\n";
+
+print "<SELECT NAME=\"anio\" SIZE=\"1\">\n";
+$anio_actual = `/bin/date +%Y`;
+print "<OPTION SELECTED>", $anio_actual-0,"\n";
+print "<OPTION>", $anio_actual-1,"\n";
+print "<OPTION>", $anio_actual-2,"\n";
+print "</SELECT></TD></TR>";
+
+print <<End_of_Tail;
+</TABLE>
+<INPUT TYPE=\"Submit\" VALUE=\"Reporte\">
+</FORM>
+</BODY>
+</HTML>
+End_of_Tail
+
+exit;
+
+
+
+sub parse_form_data
+{
+    local (*FORM_DATA) = @_;
+    local ( $request_method, $query_string, @key_value_pairs,
+                  $key_value, $key, $value);
+
+    $request_method = $ENV{'REQUEST_METHOD'};
+    if ($request_method eq "GET") {
+        $query_string = $ENV{'QUERY_STRING'};
+    } elsif ($request_method eq "POST") {
+        read (STDIN, $query_string, $ENV{'CONTENT_LENGTH'});
+    } else {
+        &return_error (500, "Error en el Server",
+                            " El Server utiliza un m&eacute;todo no soportado");
+    }
+
+    @key_value_pairs = split (/&/, $query_string);
+    foreach $key_value (@key_value_pairs) {
+        ($key, $value) = split (/=/, $key_value);
+        $value =~ tr/+/ /;
+        $value =~ s/%([\dA-Fa-f][\dA-Fa-f])/pack ("C", hex ($1))/eg;
+
+        if (defined($FORM_DATA{$key})) {
+            $FORM_DATA{$key} = join ("\0", $FORM_DATA{$key}, $value);
+        } else {
+                    $FORM_DATA{$key} = $value;
+        }
+    }
+}
+
+sub return_error
+{
+    local ($status, $keyword, $message) = @_;
+    print "Content-type: text/html", "\n";
+    print "Status: ", $status, " ", $keyword, "\n\n";
+    print <<End_of_Error;
+<HTML>
+<HEAD>
+    <TITLE>CyberBill - Error Inesperado</TITLE>
+</HEAD>
+<BODY>
+<H1>$keyword</H1>
+<HR>$message<HR>
+Por favor, contactenos telefonicamente para mayor informacion.
+</BODY>
+</HTML>
+End_of_Error
+    exit(1);
+}
+

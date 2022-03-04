@@ -1,0 +1,38 @@
+#!/usr/bin/perl
+
+$grep = "/bin/grep";
+$tail = "/usr/bin/tail";
+
+$apache_root = "/usr/local/apache-root";
+$extension = `/bin/date --date='1 day ago' +%y%m%d`;
+($extension) = ($extension =~ /([^\n]*)/);
+
+$fecha = `/bin/date +%d/%m/%Y`;
+
+system ("cd $apache_root/logs; mv tarifacion.log tarifacion_$extension.log");
+
+open (LOG, "> $apache_root/logs/tarifacion.log");
+{
+	print LOG "Archivo Log Cyberbill - $fecha";
+}
+
+open (WKS, "/bin/grep -v ^# /etc/cyberbill.conf |");
+while (<WKS>)
+{
+	chop;
+	if ($_ ne "")
+	{
+		@ip = split /\s+/, $_;
+		$ultima_linea = `$grep $ip[0] $apache_root/logs/tarifacion_$extension.log| $tail -n 1`;
+
+		if ($ultima_linea =~ m/begins/)
+		{
+			print LOG $ultima_linea;
+		}
+	}
+}
+close (WKS);
+close (LOG);
+
+exit;
+
